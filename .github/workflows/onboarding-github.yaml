@@ -1,0 +1,40 @@
+name: Onboard GitHub user (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'GitHub username to onboard'
+        required: true
+        type: string
+      teams:
+        description: 'Comma-separated team slugs (e.g., core-infra,infra-intern)'
+        required: false
+        type: string
+      role:
+        description: 'Org role (direct_member or admin)'
+        required: false
+        default: 'direct_member'
+        type: string
+
+permissions: {}  # use minimal default permissions for GITHUB_TOKEN; we rely on the PAT
+
+jobs:
+  onboard:
+    runs-on: ubuntu-latest
+    environment: github-onboard-run   # still works, even without required reviewers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --upgrade pip requests
+      - name: Run onboarding
+        env:
+          ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          DEFAULT_ORG: test-onboarding-smallcase
+        run: |
+          python onboarding/github_onboarding.py \
+            --username "${{ github.event.inputs.username }}" \
+            --teams "${{ github.event.inputs.teams }}" \
+            --role "${{ github.event.inputs.role }}"
