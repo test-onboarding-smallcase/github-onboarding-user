@@ -1,17 +1,9 @@
 import os
 import logging
 import requests
-import json, re, yaml
-import boto3
 import time
 from typing import Optional
 import sys
-from git import Repo
-from github import Github
-from botocore.exceptions import ClientError
-from google.oauth2.service_account import Credentials as ServiceAccountCredentials
-from googleapiclient.discovery import build
-from pathlib import Path
 
 API_BASE = "https://api.github.com"
 HEADERS_BASE = {
