@@ -1,39 +1,18 @@
-"""
-onboard_user.py
-
-Usage:
-  python3 scripts/onboard_user.py --username target-user --teams core-infra,infra-intern
-  OR override org:
-  python3 scripts/onboard_user.py --org some-org --username target-user --teams core-infra
-
-Behavior:
-  - Org resolution order: CLI --org > DEFAULT_ORG env var > hardcoded "smallcase"
-  - Token is read from ORG_ADMIN_TOKEN (preferred) or GITHUB_TOKEN.
-  - Logs to stdout with timestamps. Set ONBOARD_LOG_LEVEL=DEBUG for verbose logs.
-
-Environment:
-  ORG_ADMIN_TOKEN must be set (repo secret ORG_ADMIN_TOKEN when running in Actions)
-"""
 from __future__ import annotations
 import os
 import sys
 import argparse
 import json
-import time
 import logging
 from typing import Optional, Tuple
-import requests
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils.utils_module import get_token, request_with_retries, die
 
-API_BASE = "https://api.github.com"
-HEADERS_BASE = {
-    "Accept": "application/vnd.github+json",
-    "User-Agent": "sc-infra-vpn-butler-onboard-script"
-}
-
-# --- Logging setup ---------------------------------------------------------
+# Logging setup 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("onboard_user")
+
 
 # Allow overriding log level via env (DEBUG, INFO, WARNING, ERROR)
 if os.environ.get("ONBOARD_LOG_LEVEL"):
@@ -41,84 +20,7 @@ if os.environ.get("ONBOARD_LOG_LEVEL"):
     logger.setLevel(getattr(logging, level, logging.INFO))
 
 
-# --- Utilities -------------------------------------------------------------
-def die(msg: str, code: int = 1) -> None:
-    logger.error(msg)
-    sys.exit(code)
-
-
-def get_token() -> str:
-    token = os.environ.get("ORG_ADMIN_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        die("ORG_ADMIN_TOKEN (or GITHUB_TOKEN) env var not set", code=2)
-    return token
-
-
-def request_with_retries(method: str, path: str, token: str,
-                         json_payload: Optional[dict] = None,
-                         params: Optional[dict] = None,
-                         max_retries: int = 5,
-                         backoff_factor: float = 1.0) -> requests.Response:
-    """
-    Make an HTTP request with retries for transient failures.
-    Retries on network errors and on 429/502/503/504.
-    """
-    url = f"{API_BASE}{path}"
-    headers = HEADERS_BASE.copy()
-    headers["Authorization"] = f"token {token}"
-
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            logger.debug("HTTP %s %s (attempt %d) payload=%s params=%s", method, url, attempt,
-                         json_payload if json_payload else "-", params if params else "-")
-            resp = requests.request(method, url, headers=headers, json=json_payload, params=params, timeout=30)
-        except requests.RequestException as e:
-            logger.warning("Network error on attempt %d: %s", attempt, e)
-            if attempt >= max_retries:
-                logger.exception("Max retries reached for %s %s", method, url)
-                raise
-            wait = backoff_factor * (2 ** (attempt - 1))
-            logger.info("Retrying after %.1fs...", wait)
-            time.sleep(wait)
-            continue
-
-        # If response is OK-ish, return it
-        if resp.status_code < 400:
-            logger.debug("HTTP success %s %s -> %s", method, url, resp.status_code)
-            return resp
-
-        # Retry on transient server errors / rate limits
-        if resp.status_code in (429, 502, 503, 504):
-            logger.warning("Transient HTTP %d on attempt %d for %s %s", resp.status_code, attempt, method, url)
-            if attempt >= max_retries:
-                logger.error("Max retries reached with status %d; returning response", resp.status_code)
-                return resp
-            # If rate-limited, prefer X-RateLimit-Reset if present
-            reset = resp.headers.get("X-RateLimit-Reset")
-            if reset:
-                try:
-                    reset_ts = int(reset)
-                    wait = max(0, reset_ts - int(time.time())) + 1
-                    logger.info("Rate-limited. Waiting until reset in %ds", wait)
-                    time.sleep(wait)
-                except Exception:
-                    wait = backoff_factor * (2 ** (attempt - 1))
-                    logger.info("Waiting %.1fs (backoff)", wait)
-                    time.sleep(wait)
-            else:
-                wait = backoff_factor * (2 ** (attempt - 1))
-                logger.info("Waiting %.1fs (backoff)", wait)
-                time.sleep(wait)
-            continue
-
-        # For other 4xx/5xx, return response for caller to handle/log
-        logger.debug("HTTP non-retryable status %d for %s %s", resp.status_code, method, url)
-        return resp
-
-
-# --- GitHub API flow functions ---------------------------------------------
+# GitHub API flow functions
 def ensure_user_exists(username: str, token: str) -> dict:
     logger.info("Looking up GitHub user '%s'...", username)
     resp = request_with_retries("GET", f"/users/{username}", token)
@@ -140,7 +42,6 @@ def check_org_membership(org: str, username: str, token: str) -> Optional[dict]:
     if resp.status_code == 404:
         logger.info("No membership record found for %s in org %s (404).", username, org)
         return None
-    # Some orgs with SSO may return 403; propagate helpful error
     if resp.status_code == 403:
         msg = resp.text or resp.reason
         logger.error("403 when checking membership: %s", msg)
@@ -190,7 +91,6 @@ def add_user_to_team(org: str, team_slug: str, username: str, token: str, role: 
     return status, resp.text
 
 
-# --- CLI & Main ------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--org", required=False, help="Org slug (optional; defaults to DEFAULT_ORG env var or 'smallcase')")
