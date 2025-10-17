@@ -6,6 +6,7 @@ from typing import Optional
 import sys
 from pathlib import Path
 from datetime import datetime
+from pymongo import MongoClient
 
 try:
     from config import MONGO_URI as CONFIG_MONGO_URI, MONGO_DB_NAME, MONGO_ACTIVE_COLLECTION, MONGO_OFFBOARDED_COLLECTION
