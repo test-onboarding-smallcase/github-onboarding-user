@@ -6,6 +6,7 @@ import time
 from typing import Optional
 import sys
 from pathlib import Path
+import certifi
 from pymongo import MongoClient
 from datetime import datetime
 
@@ -988,7 +989,10 @@ def upsert_github_audit_entry(github_id: int,
         db_name = db_name or os.environ.get("MONGO_DB_NAME") or MONGO_DB_NAME or "Github"
         collection_name = collection_name or os.environ.get("MONGO_COLLECTION") or MONGO_ACTIVE_COLLECTION or "active_users"
 
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client = MongoClient(uri,
+                             serverSelectionTimeoutMS=5000,
+                             tls=True,
+                             tlsCAFile=certifi.where())
         # test connection (will raise on failure)
         client.server_info()
 
