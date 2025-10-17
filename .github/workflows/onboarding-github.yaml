@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
       - run: |
           python -m pip install --upgrade pip
-          pip install requests pymongo dnspython certifi
+          pip install requests pymongo dnspython certifi boto3 google-api-python-client google-auth
       - name: Run onboarding
         env:
           ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
