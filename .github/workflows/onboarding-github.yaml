@@ -33,6 +33,9 @@ jobs:
         env:
           ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
           DEFAULT_ORG: test-onboarding-smallcase
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MONGO_DB_NAME: Github
+          MONGO_COLLECTION: active_users
         run: |
           python onboarding/github_onboarding.py \
             --username "${{ github.event.inputs.username }}" \
