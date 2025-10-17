@@ -5,7 +5,6 @@ import time
 from typing import Optional
 import sys
 from pathlib import Path
-from pymongo import MongoClient
 from datetime import datetime
 
 try:
