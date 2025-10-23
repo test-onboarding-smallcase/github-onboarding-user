@@ -3,8 +3,8 @@ name: Onboard GitHub user (manual)
 on:
   workflow_dispatch:
     inputs:
-      username:
-        description: 'GitHub username to onboard'
+      clickup_task:
+        description: 'ClickUp task id to pull Email and GitHub Username from the form'
         required: true
         type: string
       teams:
@@ -42,6 +42,6 @@ jobs:
           MONGO_COLLECTION: active_users
         run: |
           python onboarding/github_onboarding.py \
-            --username "${{ github.event.inputs.username }}" \
+            --clickup-task "${{ github.event.inputs.clickup_task }}" \
             --teams "${{ github.event.inputs.teams }}" \
             --role "${{ github.event.inputs.role }}"

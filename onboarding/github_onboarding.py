@@ -94,7 +94,7 @@ def add_user_to_team(org: str, team_slug: str, username: str, token: str, role: 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--org", required=False, help="Org slug (optional; defaults to DEFAULT_ORG env var or 'smallcase')")
-    p.add_argument("--username", required=False, help="GitHub username to onboard (optional if using --clickup-task)")
+    # p.add_argument("--username", required=False, help="GitHub username to onboard (optional if using --clickup-task)")
     p.add_argument("--teams", default="", help="Comma-separated team slugs (e.g., core-infra,infra-intern)")
     p.add_argument("--role", default="direct_member", choices=["direct_member", "admin"], help="Org role for the invite")
     p.add_argument("--clickup-task", required=False, help="ClickUp task id to pull Email and Github Username from the form")
@@ -112,6 +112,7 @@ def main():
     clickup_github = None
     combined_approvers = []
     if args.clickup_task:
+        logger.info("Fetching GitHub username, Email, and Approvers automatically from ClickUp task.")
         clickup_api_token = os.environ.get("CLICKUP_API_TOKEN")
         clickup_team_id = os.environ.get("CLICKUP_TEAM_ID")
         if not clickup_api_token or not clickup_team_id:
@@ -165,9 +166,10 @@ def main():
         logger.info("ClickUp returned GitHub username=%s email=%s approvers=%s", clickup_github, clickup_email, combined_approvers)
 
     # Resolve username: CLI flag wins if provided; otherwise fallback to ClickUp
-    username = args.username or clickup_github
+    username = clickup_github #or args.username
     if not username:
-        die("Missing GitHub username: provide --username or use --clickup-task with 'Github Username' field", code=3)
+        # die("Missing GitHub username: provide --username or use --clickup-task with 'Github Username' field", code=3)
+        die("Failed to extract GitHub username from ClickUp task. Ensure the ClickUp form has a 'GitHub Username' field.", code=3)
 
     token = get_token()
 
