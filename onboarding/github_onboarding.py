@@ -118,32 +118,51 @@ def main():
             die("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set when using --clickup-task", code=8)
         logger.info("Fetching ClickUp data for task %s...", args.clickup_task)
         cu = get_clickup_info(args.clickup_task, clickup_api_token, clickup_team_id)
-        if args.clickup_task:
-            clickup_api_token = os.environ.get("CLICKUP_API_TOKEN")
-            clickup_team_id = os.environ.get("CLICKUP_TEAM_ID")
-            if not clickup_api_token or not clickup_team_id:
-                die("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set when using --clickup-task", code=8)
-            logger.info("Fetching ClickUp data for task %s...", args.clickup_task)
-            cu = get_clickup_info(args.clickup_task, clickup_api_token, clickup_team_id)
-            if not cu or (isinstance(cu, tuple) and cu[0] is False):
-                logger.error("Failed to fetch ClickUp task or parse fields: %s", cu)
-                die("ClickUp lookup failed", code=9)
-            # cu is a dict; we expect keys 'Email' and 'GitHub' and maybe 'Approver'
-            clickup_email = cu.get("Email")
-            clickup_github = cu.get("GitHub")
-            # get explicit approver(s) from the ClickUp custom 'Approver' field (if present)
-            clickup_field_approvers = cu.get("Approver") or []
-            # also try to parse comments for who left approval comments
-            try:
-                clickup_comment_approvers = get_clickup_approvers_from_comments(args.clickup_task, clickup_api_token, clickup_team_id)
-            except Exception:
-                clickup_comment_approvers = []
-            # combine both (unique)
-            combined_approvers = []
-            for a in (clickup_field_approvers or []) + (clickup_comment_approvers or []):
-                if a and a not in combined_approvers:
-                    combined_approvers.append(a)
-            logger.info("ClickUp returned GitHub username=%s email=%s approvers=%s", clickup_github, clickup_email, combined_approvers)
+        # if args.clickup_task:
+        #     clickup_api_token = os.environ.get("CLICKUP_API_TOKEN")
+        #     clickup_team_id = os.environ.get("CLICKUP_TEAM_ID")
+        #     if not clickup_api_token or not clickup_team_id:
+        #         die("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set when using --clickup-task", code=8)
+        #     logger.info("Fetching ClickUp data for task %s...", args.clickup_task)
+        #     cu = get_clickup_info(args.clickup_task, clickup_api_token, clickup_team_id)
+        #     if not cu or (isinstance(cu, tuple) and cu[0] is False):
+        #         logger.error("Failed to fetch ClickUp task or parse fields: %s", cu)
+        #         die("ClickUp lookup failed", code=9)
+        #     # cu is a dict; we expect keys 'Email' and 'GitHub' and maybe 'Approver'
+        #     clickup_email = cu.get("Email")
+        #     clickup_github = cu.get("GitHub")
+        #     # get explicit approver(s) from the ClickUp custom 'Approver' field (if present)
+        #     clickup_field_approvers = cu.get("Approver") or []
+        #     # also try to parse comments for who left approval comments
+        #     try:
+        #         clickup_comment_approvers = get_clickup_approvers_from_comments(args.clickup_task, clickup_api_token, clickup_team_id)
+        #     except Exception:
+        #         clickup_comment_approvers = []
+        #     # combine both (unique)
+        #     combined_approvers = []
+        #     for a in (clickup_field_approvers or []) + (clickup_comment_approvers or []):
+        #         if a and a not in combined_approvers:
+        #             combined_approvers.append(a)
+        #     logger.info("ClickUp returned GitHub username=%s email=%s approvers=%s", clickup_github, clickup_email, combined_approvers)
+        if not cu or (isinstance(cu, tuple) and cu[0] is False):
+            logger.error("Failed to fetch ClickUp task or parse fields: %s", cu)
+            die("ClickUp lookup failed", code=9)
+        # cu is a dict; we expect keys 'Email' and 'GitHub' and maybe 'Approver'
+        clickup_email = cu.get("Email")
+        clickup_github = cu.get("GitHub")
+        # get explicit approver(s) from the ClickUp custom 'Approver' field (if present)
+        clickup_field_approvers = cu.get("Approver") or []
+        # also try to parse comments for who left approval comments
+        try:
+            clickup_comment_approvers = get_clickup_approvers_from_comments(args.clickup_task, clickup_api_token, clickup_team_id)
+        except Exception:
+            clickup_comment_approvers = []
+        # combine both (unique)
+        combined_approvers = []
+        for a in (clickup_field_approvers or []) + (clickup_comment_approvers or []):
+            if a and a not in combined_approvers:
+                combined_approvers.append(a)
+        logger.info("ClickUp returned GitHub username=%s email=%s approvers=%s", clickup_github, clickup_email, combined_approvers)
 
     # Resolve username: CLI flag wins if provided; otherwise fallback to ClickUp
     username = args.username or clickup_github
