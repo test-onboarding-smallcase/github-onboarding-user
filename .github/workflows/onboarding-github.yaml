@@ -1,6 +1,4 @@
-name: github-onboarding-butler
-
-run-name: "GitHub Onboarding | ClickUp: ${{ inputs.clickup_task }} | Triggered by ${{ github.actor }}"
+name: Onboard GitHub user (manual)
 
 on:
   workflow_dispatch:
@@ -19,45 +17,32 @@ on:
         default: 'direct_member'
         type: string
 
-permissions:
-  id-token: write
-  contents: read
+permissions: {}  # use minimal default permissions for GITHUB_TOKEN; we rely on the PAT
 
 jobs:
-  onboard_github_user:
-    runs-on: self-runner-dind-infra
-    env:
-      AWS_IAM_ROLE: ${{ vars.AWS_IAM_ROLE }}
-      AWS_REGION: ${{ vars.AWS_REGION }}
+  onboard:
+    runs-on: ubuntu-latest
+    environment: github-onboard-run   # still works, even without required reviewers
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_IAM_ROLE }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests pymongo dnspython certifi boto3 google-api-python-client google-auth
-
+      - run: |
+          python -m pip install --upgrade pip
+          pip install requests pymongo dnspython certifi boto3 google-api-python-client google-auth
       - name: Run onboarding
         env:
           ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          DEFAULT_ORG: test-onboarding-smallcase
           MONGO_URI: ${{ secrets.MONGO_URI }}
-          DEFAULT_ORG: smallcase
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
           MONGO_DB_NAME: Github
           MONGO_COLLECTION: active_users
           INVITED_BY: ${{ github.actor }}
         run: |
-          cd onboarding
-          python github_onboarding.py \
+          python onboarding/github_onboarding.py \
             --clickup-task "${{ github.event.inputs.clickup_task }}" \
             --teams "${{ github.event.inputs.teams }}" \
             --role "${{ github.event.inputs.role }}"
