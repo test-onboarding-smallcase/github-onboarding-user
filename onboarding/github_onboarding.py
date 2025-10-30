@@ -6,15 +6,12 @@ import json
 import logging
 from typing import Optional, Tuple
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils.utils_module import get_token, request_with_retries, die, get_clickup_info, verify_email, upsert_github_audit_entry, get_clickup_approvers_from_comments
-
-# Logging setup 
+from utils.utils_module import get_token, request_with_retries, die, get_clickup_info, verify_email, upsert_github_audit_entry, get_clickup_approvers_from_comments, get_secret
+ 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger("onboard_user")
 
-
-# Allow overriding log level via env (DEBUG, INFO, WARNING, ERROR)
 if os.environ.get("ONBOARD_LOG_LEVEL"):
     level = os.environ.get("ONBOARD_LOG_LEVEL").upper()
     logger.setLevel(getattr(logging, level, logging.INFO))
@@ -114,13 +111,16 @@ def main():
     if args.clickup_task:
         logger.info("Fetching GitHub username, Email, and Approvers automatically from ClickUp task.")
 
-        # strip whitespace/newlines from secrets (fixes team_id being sent as "%0A...")
-        clickup_api_token = os.environ.get("CLICKUP_API_TOKEN", "").strip()
-        clickup_team_id = os.environ.get("CLICKUP_TEAM_ID", "").strip()
+        # Fetch ClickUp credentials
+        logger.info("Fetching ClickUp credentials via AWS Secrets Manager (prod-safe)")
+        try:
+            secrets = get_secret("vpn-butler-mongo-admin")
+            clickup_api_token = secrets["CLICKUP_API_TOKEN"]
+            clickup_team_id = "603234"  
+        except Exception as e:
+            logger.exception("Failed to fetch ClickUp credentials from AWS Secrets Manager: %s", e)
+            die("Unable to fetch ClickUp credentials from Secrets Manager", code=8)
 
-        if not clickup_api_token or not clickup_team_id:
-            die("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set when using --clickup-task", code=8)
-        
         logger.info(f"Using ClickUp team ID: '{clickup_team_id}'")
 
         logger.info("Fetching ClickUp data for task %s...", args.clickup_task)
@@ -195,7 +195,7 @@ def main():
             # fallback: if invite endpoint returned 201/202 the helper likely returned dict earlier
             audit_status = "invite_attempted"
 
-    # 3) team assignments (kept manual as requested)
+    # 3) team assignments 
     teams = [t.strip() for t in args.teams.split(",") if t.strip()]
     if not teams:
         logger.info("No teams specified — skipping team assignment.")
@@ -227,6 +227,7 @@ def main():
             invite_status=audit_status,
             clickup_task_id=args.clickup_task,
             clickup_approved_by=clickup_last_approver,
+            offboarding_status=False,
         )
         if not upsert_ok:
             logger.warning("Audit DB upsert failed for github_id=%s", userid)
