@@ -227,7 +227,6 @@ def main():
             invite_status=audit_status,
             clickup_task_id=args.clickup_task,
             clickup_approved_by=clickup_last_approver,
-            offboarding_status=False,
         )
         if not upsert_ok:
             logger.warning("Audit DB upsert failed for github_id=%s", userid)
