@@ -1021,6 +1021,7 @@ def upsert_github_audit_entry(github_id: int,
             "clickup_approved_by": clickup_approved_by,
             "onboarded_at": onboarded_at,
             "updated_at": now,
+            "offboarding_status": False,
         }
 
         coll.update_one({"github_id": doc["github_id"]}, {"$set": doc}, upsert=True)
