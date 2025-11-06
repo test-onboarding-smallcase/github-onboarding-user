@@ -39,4 +39,4 @@ jobs:
           # other optional envs:
           INVITED_BY: ${{ github.actor }}
         run: |
-          python jenkins_onboarding.py --clickup-task "${{ github.event.inputs.clickup_task }}"
+          python onboarding/jenkins_onboarding.py --clickup-task "${{ github.event.inputs.clickup_task }}"
