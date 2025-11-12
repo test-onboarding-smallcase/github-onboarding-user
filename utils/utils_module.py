@@ -488,19 +488,19 @@ def get_clickup_info(task_id, api_token, team_id):
             extracted_info.get('Type'), 
             extracted_info.get('Database')
         )
-        logging.debug("Parsed ClickUp custom fields: %s", extracted_info)
-        # If DBRole still couldn't be resolved, dump the raw custom_fields for debugging
+        logging.info("ClickUp parsed: Email=%s Approvers=%s DBRole=%s", 
+                     extracted_info.get('Email'),
+                     extracted_info.get('Approver'),
+                     extracted_info.get('DBRole'))
+        # If DBRole still couldn't be resolved, dump the raw custom_fields for debugging.
         if not extracted_info.get('DBRole'):
-            logging.warning("DBRole could not be resolved from ClickUp custom fields for task %s. Dumping raw custom_fields for debugging.", task_id)
+            logging.warning(
+                "DBRole could not be resolved from ClickUp custom fields for task %s. Dumping raw custom_fields for debugging.", 
+                task_id
+            )
             for f in response.get('custom_fields', []):
                 logging.debug("CF DUMP -> name=%r, value=%r, type_config=%r", f.get('name'), f.get('value'), f.get('type_config'))
         return extracted_info
-    except requests.RequestException as e:
-        logging.error(f"Error accessing ClickUp API: {e}")
-        return False, "ClickUp access error"
-    except KeyError:
-        logging.error("Unexpected response format from ClickUp API")
-        return False, "ClickUp response error"
 
 
 def is_clickup_approved(team_name, task_id, api_token, team_id, staging=False, environment=None, database=None):
