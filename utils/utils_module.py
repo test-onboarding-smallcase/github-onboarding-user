@@ -501,6 +501,12 @@ def get_clickup_info(task_id, api_token, team_id):
             for f in response.get('custom_fields', []):
                 logging.debug("CF DUMP -> name=%r, value=%r, type_config=%r", f.get('name'), f.get('value'), f.get('type_config'))
         return extracted_info
+    except requests.RequestException as e:
+        logging.error(f"Error accessing ClickUp API: {e}")
+        return False, "ClickUp access error"
+    except KeyError:
+        logging.error("Unexpected response format from ClickUp API")
+        return False, "ClickUp response error"
 
 
 def is_clickup_approved(team_name, task_id, api_token, team_id, staging=False, environment=None, database=None):
