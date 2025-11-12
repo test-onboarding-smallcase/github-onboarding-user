@@ -1,219 +1,183 @@
 #!/usr/bin/env python3
 """
-Jenkins onboarding shim for testing ClickUp -> audit DB behaviour.
+Jenkins onboarding with ClickUp -> Jenkins API -> audit DB.
 
-Usage (test):
-  # Fetch email from ClickUp task, create local username/password, and upsert audit record.
-  python onboarding/jenkins_onboarding.py --clickup-task 86d0w10pw
-
-Usage (manual/test without ClickUp):
-  python onboarding/jenkins_onboarding.py --email test.user@smallcase.com
-
-Notes:
-- This script intentionally comments out the live Jenkins HTTP/groovy execution.
-- It will still generate the Groovy payload and will upsert a record into MongoDB:
-  DB name: Jenkins
-  Collection: active_users
-- It imports helpers from utils.utils_module (get_clickup_info, get_clickup_approvers_from_comments).
+Usage:
+  python jenkins_onboarding.py --clickup-task 86d0w10pw
+  python jenkins_onboarding.py --email test.user@smallcase.com
 """
 
 from __future__ import annotations
 import os
-import re
 import sys
 import json
 import argparse
-import secrets
-import string
 import logging
+import requests
 from datetime import datetime
+
 HERE = os.path.abspath(os.path.dirname(__file__))          # .../repo/onboarding
 REPO_ROOT = os.path.abspath(os.path.join(HERE, ".."))      # .../repo
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
 # mongo deps
 import certifi
 from pymongo import MongoClient
 
-# local utils (assumes repository layout where utils/utils_module.py exists)
-# The utils module contains get_clickup_info and get_clickup_approvers_from_comments
+# local utils
 try:
-    from utils.utils_module import get_clickup_info, get_clickup_approvers_from_comments
+    from utils.utils_module import get_clickup_info, get_clickup_approvers_from_comments, verify_email
 except Exception as e:
-    # fall back with clear error for devs if import fails
-    raise ImportError("Failed to import utils.utils_module. Ensure script runs from repo root and utils/utils_module.py is present.") from e
+    raise ImportError("Failed to import utils.utils_module.") from e
 
 LOG = logging.getLogger("jenkins_onboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-
-def username_from_email(email: str) -> str:
-    local = email.split("@", 1)[0].lower()
-    u = re.sub(r"[^a-z0-9]+", "_", local).strip("_")
-    return u or "user"
-
-
-def gen_password(n: int = 20) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(n))
+def get_crumb(session: requests.Session, base_url: str) -> dict:
+    r = session.get(f"{base_url}/crumbIssuer/api/json", timeout=30)
+    if r.status_code == 404:
+        return {}
+    r.raise_for_status()
+    data = r.json()
+    return {data["crumbRequestField"]: data["crumb"]}
 
 
-def build_groovy(username: str,
-                 password: str,
-                 email: str,
-                 set_email: bool,
+def build_groovy(
                  user_perms: list[str],
                  groups: list[str],
                  group_perms: list[str],
-                 reset_password: bool) -> str:
-    """
-    Return Groovy script string. This is identical to your working script's builder.
-    """
+                 sso_sid: str | None = None,
+                 force_replace: bool = False) -> str:
     lines = []
+    
     for p in user_perms:
-        lines.append(f'grant("{p}", "{username}")')
+        lines.append(f'grant("{p}", SID)')
     for g in groups:
         for p in group_perms:
             lines.append(f'grant("{p}", "{g}")')
     lines_block = "\n".join(lines)
 
-    email_block = """
-// Set email if Mailer plugin is available
-try {
-  def cl = j.getPluginManager().uberClassLoader
-  def MailerUserProp = cl.loadClass('hudson.tasks.Mailer$UserProperty')
-  def current = u.getProperty(MailerUserProp)
-  if (current == null || current.address != EMAIL) {
-    u.addProperty(MailerUserProp.getConstructor(String).newInstance(EMAIL))
-    u.save()
-  }
-} catch (Throwable ignore) {
-  // Mailer not installed; skip setting email
-}
-""".strip() if set_email else "// Email setting skipped by flag"
 
-    reset_block = """
-// Reset password on existing user as requested
-def details = hudson.security.HudsonPrivateSecurityRealm.Details.fromPlainPassword(PASSWORD)
-u.addProperty(details)
-u.save()
-""".strip() if reset_password else "// Password reset skipped"
-
-    # Use placeholder-free substitution to avoid Groovy interpolation surprises
-    groovy_tpl = f'''
+    groovy_tpl = '''
 import jenkins.model.Jenkins
 import hudson.security.*
-import hudson.model.User
 import groovy.json.JsonOutput
 import groovy.transform.Field
 
 def j = Jenkins.get()
 def out = [] as List
 
-// Ensure local user database
-def realm = j.getSecurityRealm()
-if (!(realm instanceof HudsonPrivateSecurityRealm)) {{
-  throw new IllegalStateException("Local user database (HudsonPrivateSecurityRealm) required.")
-}}
-
 // Inputs
-def USERNAME = "{username}"
-def PASSWORD = "{password}"
-def EMAIL    = "{email}"
-
-// Create user if absent; otherwise optionally reset password
-def u = User.get(USERNAME, false)
-if (u == null) {{
-  realm.createAccount(USERNAME, PASSWORD)
-  u = User.get(USERNAME)
-  out << "created_user:" + USERNAME
-}} else {{
-  out << "user_exists:" + USERNAME
-  {reset_block}
-  if ({str(reset_password).lower()}) {{
-    out << "password_reset_done"
-  }}
-}}
-
-{email_block}
+def SID = __SID__
 
 // Ensure Global Matrix strategy
-def strategy = j.getAuthorizationStrategy()
-if (!(strategy instanceof GlobalMatrixAuthorizationStrategy)) {{
-  strategy = new GlobalMatrixAuthorizationStrategy()
-  out << "installed_new_global_matrix_strategy"
-}} else {{
+def currStrategy = j.getAuthorizationStrategy()
+out << "current_strategy:" + currStrategy.getClass().getName()
+def strategy = null
+if (!(currStrategy instanceof GlobalMatrixAuthorizationStrategy)) {
+  out << "current_strategy_is_not_GlobalMatrixAuthorizationStrategy"
+  if (!__FORCE_REPLACE__) {
+    out << "refusing_to_replace_strategy_without_force_flag"
+    def map = [:].withDefault { [] }
+    def result = [events: out, matrix: map]
+    return JsonOutput.toJson(result)
+  } else {
+    strategy = new GlobalMatrixAuthorizationStrategy()
+    out << "replaced_with_new_GlobalMatrixAuthorizationStrategy"
+  }
+} else {
+  strategy = currStrategy
   out << "using_existing_global_matrix_strategy"
-}}
+}
 
-// Label → Permission constants (Jenkins 2.289.x)
+// Snapshot pre-change
+def preMatrix = [:].withDefault { [] }
+def granted = j.getAuthorizationStrategy().getGrantedPermissions()
+if (granted != null) {
+  granted.each { perm, sids ->
+    sids.each { sid ->
+      preMatrix[sid] << perm.id
+    }
+  }
+} else {
+  out << "warning: getGrantedPermissions returned null"
+}
+
+// Permission map
 @Field Map<String,Object> PERM = [
   "Overall/Administer": jenkins.model.Jenkins.ADMINISTER,
-  "Overall/Read"     : jenkins.model.Jenkins.READ,
-
-  "Job/Build"        : hudson.model.Item.BUILD,
-  "Job/Cancel"       : hudson.model.Item.CANCEL,
-  "Job/Configure"    : hudson.model.Item.CONFIGURE,
-  "Job/Create"       : hudson.model.Item.CREATE,
-  "Job/Read"         : hudson.model.Item.READ,
-  "Job/Discover"     : hudson.model.Item.DISCOVER,
-  "Job/Workspace"    : hudson.model.Item.WORKSPACE,
-
-  "View/Read"        : hudson.model.View.READ
+  "Overall/Read" : jenkins.model.Jenkins.READ,
+  "Job/Build" : hudson.model.Item.BUILD,
+  "Job/Cancel" : hudson.model.Item.CANCEL,
+  "Job/Configure" : hudson.model.Item.CONFIGURE,
+  "Job/Create" : hudson.model.Item.CREATE,
+  "Job/Read" : hudson.model.Item.READ,
+  "Job/Discover" : hudson.model.Item.DISCOVER,
+  "Job/Workspace" : hudson.model.Item.WORKSPACE,
+  "View/Read" : hudson.model.View.READ
 ]
 
-// Helper: add a grant with per-call logging (closure so it captures `strategy`)
-def grant = {{ String label, String sid ->
-  if (label == null || sid == null) {{
+// Grant helper
+def grant = { String label, String sid ->
+  if (label == null || sid == null) {
     out << "skip_invalid_grant(label=" + label + ", sid=" + sid + ")"
     return
-  }}
+  }
   def p = PERM[label]
-  if (p == null) {{
+  if (p == null) {
     out << "unknown_perm_label:" + label
     return
-  }}
-  try {{
+  }
+  try {
     strategy.add(p, sid)
     out << "granted:" + label + "->" + sid
-  }} catch (Throwable t) {{
+  } catch (Throwable t) {
     out << "grant_failed:" + label + "->" + sid + ":" + t.toString()
-  }}
-}}
+  }
+}
 
-// Execute the requested grants
-{lines_block}
+// Execute grants
+__LINES_BLOCK__
 
-// Persist and show results
+// Persist
+if (strategy == null) {
+  out << "error: strategy_not_set; aborting_persist"
+  def result = [events: out, pre_matrix: preMatrix, post_matrix: [:].withDefault { [] }]
+  return JsonOutput.toJson(result)
+}
 j.setAuthorizationStrategy(strategy)
 j.save()
 out << "saved_strategy"
 
-/*
- Build a map {{ sid: [ permission ids ] }} for final verification
-*/
-def map = [:].withDefault {{ [] }}
-strategy.getGrantedPermissions().each {{ perm, sids ->
-  sids.each {{ sid ->
+// Snapshot post-change
+def map = [:].withDefault { [] }
+strategy.getGrantedPermissions().each { perm, sids ->
+  sids.each { sid ->
     map[sid] << perm.id
-  }}
-}}
+  }
+}
 
-// Add the specific user's final permissions to output for easy consumption
-def user_perms_final = map[USERNAME]
-out << "final_perms_for_user:" + (user_perms_final ? user_perms_final.join(",") : "")
+out << "final_perms_for_user:" + (map[SID] ? map[SID].join(",") : "")
 out << "matrix_snapshot_count:" + map.size()
 
-// Return structured JSON so Python can parse it easily
-def result = [events: out, matrix: map]
+// JSON result
+def result = [events: out, pre_matrix: preMatrix, post_matrix: map]
 return JsonOutput.toJson(result)
 '''.lstrip()
 
-    return groovy_tpl
+    groovy = (groovy_tpl
+              .replace("__SID__", json.dumps(sso_sid or ""))
+              .replace("__LINES_BLOCK__", lines_block)
+              .replace("__FORCE_REPLACE__", "true" if force_replace else "false")
+              )
+
+    LOG.info("Built Groovy for SID=%s; preview length=%d", sso_sid, len(groovy))
+
+    return groovy
 
 
-def upsert_audit_entry_mongo(username: str,
-                             email: str | None,
+def upsert_audit_entry_mongo(email: str,
                              invited_by: str | None,
                              invite_status: str,
                              clickup_task_id: str | None,
@@ -221,29 +185,29 @@ def upsert_audit_entry_mongo(username: str,
                              mongo_uri: str | None = None,
                              db_name: str | None = None,
                              collection_name: str | None = None) -> bool:
-    """
-    Upsert an audit record using username as a unique key.
-    DB default: Jenkins
-    Collection default: active_users
-    """
     try:
         uri = mongo_uri or os.environ.get("MONGO_URI")
         if not uri:
             LOG.error("MONGO_URI not provided; audit upsert skipped.")
             return False
+        
+        if not email:
+            LOG.error("upsert_audit_entry_mongo requires a non-empty email")
+            return False
+        
+
 
         db_name = db_name or os.environ.get("MONGO_DB_NAME") or "Jenkins"
         coll_name = collection_name or os.environ.get("MONGO_COLLECTION") or "active_users"
 
         client = MongoClient(uri, serverSelectionTimeoutMS=15000, tls=True, tlsCAFile=certifi.where())
-        client.server_info()  # raises on failure
+        client.server_info()
 
         db = client[db_name]
         coll = db[coll_name]
 
-        # Ensure an index on username exists (idempotent)
         try:
-            coll.create_index([("username", 1)], unique=True)
+            coll.create_index([("email", 1)], unique=True, partialFilterExpression={"email": {"$exists": True}})
         except Exception:
             pass
 
@@ -251,7 +215,6 @@ def upsert_audit_entry_mongo(username: str,
         onboarded_at = now if invite_status in ("invited", "accepted", "member_existing") else None
 
         doc = {
-            "username": username,
             "email": email,
             "invited_by": invited_by or os.environ.get("INVITED_BY", "jenkins_onboard_script"),
             "invite_status": invite_status,
@@ -262,9 +225,10 @@ def upsert_audit_entry_mongo(username: str,
             "offboarding_status": False,
         }
 
-        coll.update_one({"username": username}, {"$set": doc}, upsert=True)
+        query = {"email": email}
+        coll.update_one(query, {"$set": doc}, upsert=True)
         client.close()
-        LOG.info("Upserted audit entry for username=%s email=%s", username, email)
+        LOG.info("Upserted audit entry for email=%s clickup_task=%s", email, clickup_task_id)
         return True
     except Exception as e:
         LOG.exception("Failed to upsert audit entry: %s", e)
@@ -272,26 +236,29 @@ def upsert_audit_entry_mongo(username: str,
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Jenkins onboarding test harness. Uses ClickUp task to fetch email and writes audit to Mongo.")
+    p = argparse.ArgumentParser(description="Jenkins onboarding with ClickUp -> Jenkins -> audit DB.")
     group = p.add_mutually_exclusive_group(required=True)
-    group.add_argument("--clickup-task", help="ClickUp task id to fetch Email (preferred for CI)")
-    group.add_argument("--email", help="Direct email to use (for local testing)")
-    p.add_argument("--set-email", action="store_true", help="Set email on Jenkins user (skipped in this test harness)")
-    p.add_argument("--reset-password", action="store_true", help="Reset password if user exists (simulated)")
-    p.add_argument("--groups", default="authenticated", help="Comma-separated SIDs to grant (kept for groovy generation)")
+    group.add_argument("--clickup-task", help="ClickUp task id to fetch Email")
+    group.add_argument("--email", help="Direct email (local testing)")
+    p.add_argument("--groups", default="", help="Comma-separated SIDs (default empty)")
     p.add_argument("--user-perms", default=(
         "Overall/Read,"
         "Job/Build,Job/Cancel,Job/Configure,Job/Create,Job/Read,Job/Workspace,"
         "View/Read"
-    ), help="Comma-separated permission labels for the user")
-    p.add_argument("--group-perms", default="Overall/Read,Job/Discover,View/Read", help="Comma-separated permission labels applied to each group SID")
+    ), help="Comma-separated user perms")
+    p.add_argument("--group-perms", default="Overall/Read,Job/Discover,View/Read", help="Comma-separated group perms")
+    p.add_argument("--jenkins-url", default=os.environ.get("JENKINS_URL", "http://localhost:8080"))
+    p.add_argument("--user", default=os.environ.get("JENKINS_USER"))
+    p.add_argument("--token", default=os.environ.get("JENKINS_TOKEN"))
+    p.add_argument("--dry-run", action="store_true", help="Preview Groovy, no Jenkins POST")
+    p.add_argument("--force-replace-strategy", action="store_true", help="DANGEROUS: Replace strategy")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    # 1) Extract email either from ClickUp or use provided
+    # Fetch from ClickUp or use --email
     email = None
     clickup_task = None
     combined_approvers = []
@@ -301,103 +268,161 @@ def main():
         api_token = os.environ.get("CLICKUP_API_TOKEN", "").strip()
         team_id = os.environ.get("CLICKUP_TEAM_ID", "").strip()
         if not api_token or not team_id:
-            LOG.error("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set as env vars to use --clickup-task")
+            LOG.error("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID required")
             sys.exit(2)
 
         LOG.info("Fetching ClickUp task %s", clickup_task)
         cu = get_clickup_info(clickup_task, api_token, team_id)
         if not cu or (isinstance(cu, tuple) and cu[0] is False):
-            LOG.error("Failed to fetch/parse ClickUp task: %s", cu)
+            LOG.error("Failed to fetch ClickUp: %s", cu)
             sys.exit(3)
 
-        email = cu.get("Email")
-        # fetch approver list from comments (same helper used in other onboard flows)
+        email = cu.get("Email") or cu.get("email")
         try:
             comment_approvers = get_clickup_approvers_from_comments(clickup_task, api_token, team_id)
         except Exception:
             comment_approvers = []
-        # combine field approvers + comment approvers
         combined_approvers = []
         for a in (cu.get("Approver") or []) + (comment_approvers or []):
             if a and a not in combined_approvers:
                 combined_approvers.append(a)
 
-        LOG.info("ClickUp resolved Email=%s Approvers=%s", email, combined_approvers)
-
+        LOG.info("ClickUp: Email=%s Approvers=%s", email, combined_approvers)
     else:
         email = args.email.strip()
 
+    
     if not email:
-        LOG.error("No email could be determined. Ensure ClickUp task has an Email field or provide --email.")
+        LOG.error("No email. Ensure ClickUp has Email or provide --email.")
         sys.exit(4)
 
-    # Basic email normalization/validation
     email = email.lower().strip()
-    username = username_from_email(email)
-    password = gen_password(20)
+    # Validate the email format/domain using utils_module.verify_email
+    if not verify_email(email):
+        LOG.error("Resolved email %r is not allowed by verify_email(); aborting.", email)
+        sys.exit(4)
 
-    # Parse perms / groups
+    sso_sid = email
+
+    # Parse perms/groups
     def _parse_csv(s): return [p.strip() for p in s.split(",") if p.strip()]
-    user_perms = _parse_csv(args.user_perms)
-    groups = _parse_csv(args.groups)
-    group_perms = _parse_csv(args.group_perms)
+    def _dedupe(seq):
+        seen = set()
+        out = []
+        for x in seq:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
 
-    # Build Groovy payload (kept for visibility / later use)
-    groovy = build_groovy(username, password, email, args.set_email, user_perms, groups, group_perms, args.reset_password)
+    user_perms = _dedupe(_parse_csv(args.user_perms))
+    groups = _dedupe(_parse_csv(args.groups))
+    group_perms = _dedupe(_parse_csv(args.group_perms))
 
-    # 2) --- SIMULATION: skip live Jenkins execution ---
-    # The following block is intentionally commented out to avoid network calls to Jenkins
-    #
-    # with requests.Session() as s:
-    #     s.auth = (JENKINS_USER, JENKINS_TOKEN)
-    #     headers = get_crumb(s, JENKINS_URL) ...
-    #     r = s.post(f"{JENKINS_URL}/scriptText", data={"script": groovy}, headers=headers)
-    #     r.raise_for_status()
-    #     result = r.text.strip()
-    #
-    # Instead, we simulate what a successful run would output and record events.
+    if not sso_sid:
+        LOG.error("No SSO SID available (sso_sid empty); aborting.")
+        sys.exit(5)
 
-    simulated_events = [
-        f"user_created_or_verified:{username}",
-        "password_generated",
-        "permissions_granted:" + ",".join(user_perms),
-    ]
-    simulated_matrix_snapshot = {
-        "authenticated": ["hudson.model.Hudson.Read", "hudson.model.Item.Discover", "hudson.model.View.Read"],
-        username: ["hudson.model.Hudson.Read"] + [f"hudson.model.Item.{p.split('/')[-1]}" for p in user_perms if p.startswith("Job/")]  # rough map
-    }
+    # Build Groovy
+    groovy = build_groovy(
+        user_perms=user_perms,
+        groups=groups,
+        group_perms=group_perms,
+        force_replace=args.force_replace_strategy,
+        sso_sid=sso_sid,
+    )
 
-    simulated_result = {
-        "events": simulated_events,
-        "matrix": simulated_matrix_snapshot
-    }
+    # Dry-run
+    if args.dry_run:
+        print(json.dumps({
+            "action": "dry-run",
+            "groovy_preview": groovy[:4096]
+        }, indent=2))
+        sys.exit(0)
 
-    # 3) Upsert audit entry to MongoDB (Jenkins.active_users)
+    # Jenkins execution
+    if not args.user or not args.token:
+        LOG.error("JENKINS_USER and JENKINS_TOKEN required")
+        sys.exit(2)
+
+    try:
+        with requests.Session() as s:
+            s.auth = (args.user, args.token)
+            headers = get_crumb(s, args.jenkins_url)
+            r = s.post(f"{args.jenkins_url.rstrip('/')}/scriptText", data={"script": groovy}, headers=headers, timeout=60)
+            r.raise_for_status()
+            raw_text = r.text or ""
+            LOG.info("Jenkins execution success; response length=%d", len(raw_text))
+    except requests.RequestException as e:
+        LOG.error("Jenkins failed: status=%s, exception=%s",
+                  getattr(e.response, "status_code", None),
+                  str(e))
+        invite_status = "failed"
+        # build a safe error blob (no tokens)
+        result_blob = {
+            "error": "jenkins_request_failed",
+            "status_code": getattr(e.response, "status_code", None),
+            "response_excerpt": (getattr(e.response, "text", None) or "")[:2000],
+            "exception": str(e)
+        }
+        # Do not print whole response; exit after upsert attempt below
+        result_text_parsed = result_blob
+    else:
+        # Attempt to robustly parse Jenkins output (Groovy returns a JSON object but Jenkins may prefix with text)
+        json_start = raw_text.find("{")
+        json_payload = raw_text[json_start:] if json_start != -1 else raw_text
+        try:
+            jres = json.loads(json_payload)
+        except Exception:
+            LOG.warning("Failed to parse Jenkins JSON; falling back to line events")
+            # fallback: collect non-empty lines as 'events'
+            lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+            jres = {"events": lines, "post_matrix": {}}
+
+        # normalize matrix name variants used across templates
+        matrix = jres.get("post_matrix") or jres.get("matrix") or jres.get("postMatrix") or {}
+        events = jres.get("events") or []
+
+        # pick the principal key used to report final perms: SSO vs local username
+        principal_key = sso_sid
+        final_perms_for_user = matrix.get(principal_key) or []
+
+        # determine invite status from events (created_user => invited; else member_existing)
+        invite_status = "member_existing"
+        for ev in events:
+            if isinstance(ev, str) and ev.startswith("granted:"):
+                # if any grant was applied to the SID, treat as an 'invited' onboarding action
+                invite_status = "invited"
+                break
+
+        # Build a reduced result for logs / output (safe to print)
+        result_text_parsed = {
+            "events": events,
+            "final_perms_for_user": final_perms_for_user
+        }
+
+    # Upsert audit (use invite_status computed above)
     invited_by = os.environ.get("INVITED_BY", os.environ.get("USER", "jenkins_onboard_script"))
     clickup_last_approver = combined_approvers[-1] if combined_approvers else None
 
     audit_ok = upsert_audit_entry_mongo(
-        username=username,
         email=email,
         invited_by=invited_by,
-        invite_status="invited",
+        invite_status=invite_status,
         clickup_task_id=clickup_task,
         clickup_approved_by=clickup_last_approver,
-        # DB/collection can be overridden via env MONGO_URI / MONGO_DB_NAME / MONGO_COLLECTION
     )
 
+    # Build output: include only safe, small items
     out = {
-        "username": username,
         "email": email,
-        "password": password,
+        "auth": "SSO",
         "user_perms": user_perms,
         "groups": groups,
         "group_perms": group_perms,
-        "reset_password": args.reset_password,
         "clickup_task": clickup_task,
         "audit_upserted": bool(audit_ok),
-        "simulated_result": simulated_result,
-        "groovy_preview": groovy[:4096]  # include a truncated preview for inspection
+        "jenkins_result": result_text_parsed,   # small, safe subset only
     }
 
     print(json.dumps(out, indent=2))
