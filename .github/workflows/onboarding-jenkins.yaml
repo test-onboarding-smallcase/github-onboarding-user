@@ -7,6 +7,14 @@ on:
         description: 'ClickUp task id to pull Email and other fields'
         required: true
         type: string
+      dry_run:
+        description: 'Run in dry-run mode (no changes to Jenkins)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions: {} # minimal token perms
 
@@ -39,4 +47,10 @@ jobs:
           # other optional envs:
           INVITED_BY: ${{ github.actor }}
         run: |
-          python onboarding/jenkins_onboarding.py --clickup-task "${{ github.event.inputs.clickup_task }}"
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+                echo "Running in dry-run mode (no Jenkins modifications)..."
+                python onboarding/jenkins_onboarding.py --clickup-task "${{ github.event.inputs.clickup_task }}" --dry-run
+            else
+                echo "Running in live mode (Jenkins will be updated)..."
+                python onboarding/jenkins_onboarding.py --clickup-task "${{ github.event.inputs.clickup_task }}"
+            fi
