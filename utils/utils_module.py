@@ -1016,7 +1016,7 @@ def upsert_github_audit_entry(github_id: int,
                 "email": email,
                 # store who removed the user
                 "removed_by": invited_by or os.environ.get("INVITED_BY", "offboard_script"),
-                "removed_status": invite_status,
+                "removal_status": invite_status,
                 "clickup_task_id": clickup_task_id,
                 "clickup_approved_by": clickup_approved_by,
                 "offboarded_at": now,

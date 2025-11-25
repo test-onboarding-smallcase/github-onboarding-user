@@ -113,7 +113,6 @@ def main():
         removed_by = os.environ.get("INVITED_BY", os.environ.get("USER", "offboard_script"))
 
         upsert_github_audit_entry(
-            github_id=None,
             username=username,
             email=raw_email,
             invited_by=removed_by,          
