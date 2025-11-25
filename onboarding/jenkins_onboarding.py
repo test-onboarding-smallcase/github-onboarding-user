@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-Jenkins onboarding with ClickUp -> Jenkins API -> audit DB.
-
-Usage:
-  python jenkins_onboarding.py --clickup-task 86d0w10pw
-  python jenkins_onboarding.py --email test.user@smallcase.com
-"""
-
 from __future__ import annotations
 import os
 import sys
@@ -16,16 +8,14 @@ import logging
 import requests
 from datetime import datetime
 
-HERE = os.path.abspath(os.path.dirname(__file__))          # .../repo/onboarding
-REPO_ROOT = os.path.abspath(os.path.join(HERE, ".."))      # .../repo
+HERE = os.path.abspath(os.path.dirname(__file__))         
+REPO_ROOT = os.path.abspath(os.path.join(HERE, ".."))    
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-# mongo deps
 import certifi
 from pymongo import MongoClient
 
-# local utils
 try:
     from utils.utils_module import get_clickup_info, get_clickup_approvers_from_comments, verify_email
 except Exception as e:
@@ -41,7 +31,6 @@ def get_crumb(session: requests.Session, base_url: str) -> dict:
     r.raise_for_status()
     data = r.json()
     return {data["crumbRequestField"]: data["crumb"]}
-
 
 def build_groovy(
                  user_perms: list[str],
