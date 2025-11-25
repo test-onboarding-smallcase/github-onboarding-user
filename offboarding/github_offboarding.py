@@ -62,8 +62,8 @@ def main():
     DEFAULT_ORG = os.environ.get("DEFAULT_ORG", "smallcase")
     org = args.org or DEFAULT_ORG
 
-    clickup_api_token = os.environ.get("CLICKUP_API_TOKEN")
-    clickup_team_id = os.environ.get("CLICKUP_TEAM_ID")
+    clickup_api_token = (os.environ.get("CLICKUP_API_TOKEN") or "").strip()
+    clickup_team_id = (os.environ.get("CLICKUP_TEAM_ID") or "").strip()
 
     if not clickup_api_token or not clickup_team_id:
         die("CLICKUP_API_TOKEN and CLICKUP_TEAM_ID must be set", code=8)
@@ -71,8 +71,13 @@ def main():
     logger.info("Fetching ClickUp task details...")
     cu = get_clickup_info(args.clickup_task, clickup_api_token, clickup_team_id)
 
-    if not cu:
-        die("Failed to fetch ClickUp task", code=9)
+    # If ClickUp returned an error tuple (False, msg)
+    if isinstance(cu, tuple) and cu[0] is False:
+        logger.error("ClickUp lookup failed: %s", cu[1])
+        die("ClickUp lookup failed", code=9)
+
+    if not isinstance(cu, dict):
+        die("Unexpected ClickUp response format", code=9)
 
     username = cu.get("GitHub")
     email = cu.get("Email")
