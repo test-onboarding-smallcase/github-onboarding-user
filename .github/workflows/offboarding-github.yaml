@@ -1,0 +1,39 @@
+name: Offboard GitHub user (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      clickup_task:
+        description: 'ClickUp task ID'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  offboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - run: |
+          python -m pip install --upgrade pip
+          pip install requests pymongo dnspython certifi boto3
+
+      - name: Run offboarding
+        env:
+          ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          DEFAULT_ORG: test-onboarding-smallcase
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
+          MONGO_DB_NAME: Github
+          MONGO_COLLECTION: offboarded_users
+          INVITED_BY: ${{ github.actor }}
+        run: |
+          python offboarding/github_offboarding.py \
+            --clickup-task "${{ github.event.inputs.clickup_task }}"
