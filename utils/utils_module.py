@@ -1006,13 +1006,49 @@ def upsert_github_audit_entry(github_id: int,
 
         db = client[db_name]
         coll = db[collection_name]
-        # Ensure an index on github_id exists (idempotent)
-        try:
-            coll.create_index([("github_id", 1)], unique=True)
-        except Exception:
-            pass
 
         now = datetime.utcnow()
+        # Branch by collection so onboarding behavior is unchanged
+        if collection_name == "offboarded_users":
+            # Offboarding document shape
+            doc = {
+                "username": username,
+                "email": email,
+                # store who removed the user
+                "removed_by": invited_by or os.environ.get("INVITED_BY", "offboard_script"),
+                "removed_status": invite_status,
+                "clickup_task_id": clickup_task_id,
+                "clickup_approved_by": clickup_approved_by,
+                "offboarded_at": now,
+                "updated_at": now,
+            }
+
+            # Use a unique key that makes sense for offboarded docs.
+            # We can't upsert on github_id (may be None). Use username+email if available.
+            query = {}
+            if username:
+                query["username"] = username
+            elif email:
+                query["email"] = email
+            else:
+                # fallback to timestamp-based insert
+                coll.insert_one(doc)
+                client.close()
+                logging.info("Inserted offboard audit entry for username=%s email=%s", username, email)
+                return True
+
+            coll.update_one(query, {"$set": doc}, upsert=True)
+            client.close()
+            logging.info("Upserted offboard entry for username=%s email=%s", username, email)
+            return True
+
+        else:
+            # Existing onboarding/active users behavior (unchanged)
+            # Ensure an index on github_id only for onboarding/active collection
+            try:
+                coll.create_index([("github_id", 1)], unique=True)
+            except Exception:
+                pass
 
         # Set onboarded_at only when invite/accept state indicates onboarding
         onboarded_at = now if invite_status in ("invited", "accepted", "member_existing") else None

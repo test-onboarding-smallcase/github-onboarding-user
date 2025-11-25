@@ -110,13 +110,13 @@ def main():
 
     # Write audit entry (separate collection for offboarded users)
     try:
-        invited_by = os.environ.get("INVITED_BY", os.environ.get("USER", "offboard_script"))
+        removed_by = os.environ.get("INVITED_BY", os.environ.get("USER", "offboard_script"))
 
         upsert_github_audit_entry(
-            github_id=0,               # offboarding does not need a GitHub ID
+            github_id=None,
             username=username,
             email=raw_email,
-            invited_by=invited_by,
+            invited_by=removed_by,          
             invite_status=audit_status,
             clickup_task_id=args.clickup_task,
             clickup_approved_by=approvers,
