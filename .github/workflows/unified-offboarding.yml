@@ -1,0 +1,138 @@
+name: Unified Offboarding
+
+on:
+  workflow_dispatch:
+    inputs:
+      tools:
+        description: "Comma-separated tools to offboard (or 'all')"
+        required: true
+        default: "github"
+        type: choice
+        options:
+          - github
+          - atlas
+          - mongo
+          - vpn
+          - all
+      user_email:
+        description: "User email (for atlas/mongo/vpn workflows)"
+        required: false
+      github_username:
+        description: "GitHub username (optional; ClickUp usually has it)"
+        required: false
+      clickup_task:
+        description: "ClickUp task id (for github offboard)"
+        required: false
+      db_group:
+        description: "DB group (e.g. AT-PROD, SC-PROD, SC-STAG, etc.)"
+        required: false
+      vpn_group:
+        description: "VPN group (SC-PROD|LAS-PROD)"
+        required: false
+      gh_action:
+        description: "GitHub Actions run id (used for messages/links)"
+        required: false
+      infra_admin:
+        description: "Infra admin name/email (optional, for manual offboards)"
+        required: false
+      org:
+        description: "GitHub org slug (optional)"
+        required: false
+      dry_run:
+        description: "Set to true to run in dry-run mode"
+        required: false
+        default: "false"
+
+jobs:
+  offboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        # If your repo uses an OS package or extra installs for Google API / pritunl, handle here.
+
+      - name: Prepare environment and secrets
+        # expose required secrets to the job. Add any additional secrets your scripts need.
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
+          ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          PRITUNL_SC_API_TOKEN: ${{ secrets.PRITUNL_SC_API_TOKEN }}
+          PRITUNL_SC_API_SECRET: ${{ secrets.PRITUNL_SC_API_SECRET }}
+          PRITUNL_LAS_API_TOKEN: ${{ secrets.PRITUNL_LAS_API_TOKEN }}
+          PRITUNL_LAS_API_SECRET: ${{ secrets.PRITUNL_LAS_API_SECRET }}
+          VPN_BUTLER_MONGO_ADMIN: ${{ secrets.VPN_BUTLER_MONGO_ADMIN }} # optional (if you use a single JSON secret)
+          GOOGLE_CREDENTIALS_VPN_BUTLER: ${{ secrets.GOOGLE_CREDENTIALS_VPN_BUTLER }}
+        run: |
+          echo "Secrets loaded into environment for offboarding scripts (not printed)."
+
+      - name: Run unified offboarding dispatcher
+        id: run_dispatcher
+        env:
+          # propagate secrets again into the process environment so python can access them via os.environ
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_TEAM_ID: ${{ secrets.CLICKUP_TEAM_ID }}
+          ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          PRITUNL_SC_API_TOKEN: ${{ secrets.PRITUNL_SC_API_TOKEN }}
+          PRITUNL_SC_API_SECRET: ${{ secrets.PRITUNL_SC_API_SECRET }}
+          PRITUNL_LAS_API_TOKEN: ${{ secrets.PRITUNL_LAS_API_TOKEN }}
+          PRITUNL_LAS_API_SECRET: ${{ secrets.PRITUNL_LAS_API_SECRET }}
+          GOOGLE_CREDENTIALS_VPN_BUTLER: ${{ secrets.GOOGLE_CREDENTIALS_VPN_BUTLER }}
+        run: |
+          set -euo pipefail
+          TOOLS="${{ github.event.inputs.tools }}"
+          USER_EMAIL="${{ github.event.inputs.user_email || '' }}"
+          GITHUB_USERNAME="${{ github.event.inputs.github_username || '' }}"
+          CLICKUP_TASK="${{ github.event.inputs.clickup_task || '' }}"
+          DB_GROUP="${{ github.event.inputs.db_group || '' }}"
+          VPN_GROUP="${{ github.event.inputs.vpn_group || '' }}"
+          GH_ACTION="${{ github.event.inputs.gh_action || '' }}"
+          INFRA_ADMIN="${{ github.event.inputs.infra_admin || '' }}"
+          ORG="${{ github.event.inputs.org || '' }}"
+          DRY="${{ github.event.inputs.dry_run || 'false' }}"
+
+          DRY_FLAG=""
+          if [ "$DRY" = "true" ] || [ "$DRY" = "1" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+
+          python3 offboarding/dispatcher.py \
+            --tools "${TOOLS}" \
+            --user-email "${USER_EMAIL}" \
+            --github-username "${GITHUB_USERNAME}" \
+            --clickup-task "${CLICKUP_TASK}" \
+            --db_group "${DB_GROUP}" \
+            --vpn_group "${VPN_GROUP}" \
+            --gh-action "${GH_ACTION}" \
+            --infra-admin "${INFRA_ADMIN}" \
+            --org "${ORG}" ${DRY_FLAG}
+
+      - name: Upload offboarding summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offboarding-summary
+          path: offboarding_summary.json
+
+      - name: Post summary to workflow output
+        if: always()
+        run: |
+          if [ -f offboarding_summary.json ]; then
+            echo "::notice::offboarding_summary.json available as artifact"
+            cat offboarding_summary.json
+          else
+            echo "::warning::offboarding_summary.json not found"
+          fi
