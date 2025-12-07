@@ -18,29 +18,24 @@ on:
         type: string
         default: ""
 
+      tools:
+        description: "Select tools to offboard from"
+        required: false
+        type: choice
+        options:
+          - github
+          - atlas
+          - all
+        default: github
+
       dry_run:
-        description: "If true, no actual changes are made (dry run mode)"
+        description: "Dry run mode (no actual changes)"
         required: false
-        type: boolean
-        default: false
-
-      tools_all:
-        description: "Select all tools (GitHub + Atlas). If true, overrides individual tool selections."
-        required: false
-        type: boolean
-        default: false
-
-      tool_github:
-        description: "Offboard from GitHub organization"
-        required: false
-        type: boolean
-        default: true
-
-      tool_atlas:
-        description: "Offboard from Atlas databases (all db groups)"
-        required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - no
+          - yes
+        default: no
 
 permissions:
   id-token: write
@@ -99,43 +94,36 @@ jobs:
           # Inputs
           CLICKUP_TASK: ${{ github.event.inputs.clickup_task || 'INS-3472' }}
           USER_EMAIL:  ${{ github.event.inputs.user_email || '' }}
-          DRY_RUN:     ${{ github.event.inputs.dry_run == true && 'true' || 'false' }}
-          TOOLS_ALL:   ${{ github.event.inputs.tools_all == true && 'true' || 'false' }}
-          TOOL_GITHUB: ${{ github.event.inputs.tool_github != false && 'true' || 'false' }}
-          TOOL_ATLAS:  ${{ github.event.inputs.tool_atlas == true && 'true' || 'false' }}
+          TOOLS_INPUT: ${{ github.event.inputs.tools || 'github' }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'no' }}
 
         run: |
           cd offboarding
           
-          # Determine which tools to run
+          # Convert tools dropdown selection to tools list
           TOOLS_LIST=""
-          if [ "${TOOLS_ALL}" = "true" ]; then
+          if [ "${TOOLS_INPUT}" = "all" ]; then
             TOOLS_LIST="github,atlas"
+          elif [ "${TOOLS_INPUT}" = "atlas" ]; then
+            TOOLS_LIST="atlas"
           else
-            if [ "${TOOL_GITHUB}" = "true" ]; then
-              TOOLS_LIST="github"
-            fi
-            if [ "${TOOL_ATLAS}" = "true" ]; then
-              if [ -n "${TOOLS_LIST}" ]; then
-                TOOLS_LIST="${TOOLS_LIST},atlas"
-              else
-                TOOLS_LIST="atlas"
-              fi
-            fi
+            # Default to github
+            TOOLS_LIST="github"
           fi
           
-          # Default to github if no tools selected
-          if [ -z "${TOOLS_LIST}" ]; then
-            TOOLS_LIST="github"
+          # Convert dry_run dropdown to flag
+          DRY_RUN_FLAG=""
+          if [ "${DRY_RUN_INPUT}" = "yes" ]; then
+            DRY_RUN_FLAG="--dry-run"
           fi
           
           echo "CLICKUP_TASK=${CLICKUP_TASK}"
           echo "USER_EMAIL=${USER_EMAIL}"
-          echo "DRY_RUN=${DRY_RUN}"
           echo "TOOLS=${TOOLS_LIST}"
+          echo "DRY_RUN=${DRY_RUN_INPUT}"
           
           python unified_offboarding.py \
             --clickup-task "${CLICKUP_TASK}" \
             --tools "${TOOLS_LIST}" \
             $( [ -n "${USER_EMAIL}" ] && echo "--email ${USER_EMAIL}" ) \
-            $( [ "${DRY_RUN}" = "true" ] && echo "--dry-run" || true )
+            $( [ -n "${DRY_RUN_FLAG}" ] && echo "${DRY_RUN_FLAG}" )
