@@ -18,11 +18,23 @@ on:
         type: string
         default: ""
 
-      tools:
-        description: "Tools to offboard from (comma-separated). Options: github, atlas, or 'all'. Examples: 'github', 'atlas', 'github,atlas', 'all'"
+      tools_all:
+        description: "Tools: Select ALL tools (GitHub + Atlas + future tools)"
         required: false
-        type: string
-        default: "github"
+        type: boolean
+        default: false
+
+      tool_github:
+        description: "Tools: GitHub organization"
+        required: false
+        type: boolean
+        default: true
+
+      tool_atlas:
+        description: "Tools: Atlas databases (all db groups)"
+        required: false
+        type: boolean
+        default: false
 
       dry_run:
         description: "Dry run mode (no actual changes)"
@@ -90,23 +102,35 @@ jobs:
           # Inputs
           CLICKUP_TASK: ${{ github.event.inputs.clickup_task || 'INS-3472' }}
           USER_EMAIL:  ${{ github.event.inputs.user_email || '' }}
-          TOOLS_INPUT: ${{ github.event.inputs.tools || 'github' }}
+          TOOLS_ALL:   ${{ github.event.inputs.tools_all == true && 'true' || 'false' }}
+          TOOL_GITHUB: ${{ github.event.inputs.tool_github != false && 'true' || 'false' }}
+          TOOL_ATLAS:  ${{ github.event.inputs.tool_atlas == true && 'true' || 'false' }}
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'yes' }}
 
         run: |
           cd offboarding
           
-          # Process tools input (supports: "github", "atlas", "github,atlas", "all")
-          TOOLS_INPUT_LOWER=$(echo "${TOOLS_INPUT}" | tr '[:upper:]' '[:lower:]' | xargs)
+          # Build tools list from checkboxes (multi-select via individual checkboxes)
+          TOOLS_LIST=""
           
-          if [ "${TOOLS_INPUT_LOWER}" = "all" ]; then
+          # If "all" is checked, select all available tools
+          if [ "${TOOLS_ALL}" = "true" ]; then
             TOOLS_LIST="github,atlas"
           else
-            # Use the input as-is (already comma-separated if multiple)
-            # Normalize: remove spaces, convert to lowercase
-            TOOLS_LIST=$(echo "${TOOLS_INPUT_LOWER}" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+            # Build list from individual tool checkboxes
+            if [ "${TOOL_GITHUB}" = "true" ]; then
+              TOOLS_LIST="github"
+            fi
             
-            # Default to github if empty
+            if [ "${TOOL_ATLAS}" = "true" ]; then
+              if [ -n "${TOOLS_LIST}" ]; then
+                TOOLS_LIST="${TOOLS_LIST},atlas"
+              else
+                TOOLS_LIST="atlas"
+              fi
+            fi
+            
+            # Default to github if nothing selected
             if [ -z "${TOOLS_LIST}" ]; then
               TOOLS_LIST="github"
             fi
