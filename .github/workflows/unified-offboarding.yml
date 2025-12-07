@@ -19,14 +19,10 @@ on:
         default: ""
 
       tools:
-        description: "Select tools to offboard from"
+        description: "Tools to offboard from (comma-separated). Options: github, atlas, or 'all'. Examples: 'github', 'atlas', 'github,atlas', 'all'"
         required: false
-        type: choice
-        options:
-          - github
-          - atlas
-          - all
-        default: github
+        type: string
+        default: "github"
 
       dry_run:
         description: "Dry run mode (no actual changes)"
@@ -35,7 +31,7 @@ on:
         options:
           - no
           - yes
-        default: no
+        default: yes
 
 permissions:
   id-token: write
@@ -95,20 +91,25 @@ jobs:
           CLICKUP_TASK: ${{ github.event.inputs.clickup_task || 'INS-3472' }}
           USER_EMAIL:  ${{ github.event.inputs.user_email || '' }}
           TOOLS_INPUT: ${{ github.event.inputs.tools || 'github' }}
-          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'no' }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'yes' }}
 
         run: |
           cd offboarding
           
-          # Convert tools dropdown selection to tools list
-          TOOLS_LIST=""
-          if [ "${TOOLS_INPUT}" = "all" ]; then
+          # Process tools input (supports: "github", "atlas", "github,atlas", "all")
+          TOOLS_INPUT_LOWER=$(echo "${TOOLS_INPUT}" | tr '[:upper:]' '[:lower:]' | xargs)
+          
+          if [ "${TOOLS_INPUT_LOWER}" = "all" ]; then
             TOOLS_LIST="github,atlas"
-          elif [ "${TOOLS_INPUT}" = "atlas" ]; then
-            TOOLS_LIST="atlas"
           else
-            # Default to github
-            TOOLS_LIST="github"
+            # Use the input as-is (already comma-separated if multiple)
+            # Normalize: remove spaces, convert to lowercase
+            TOOLS_LIST=$(echo "${TOOLS_INPUT_LOWER}" | tr -d ' ' | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+            
+            # Default to github if empty
+            if [ -z "${TOOLS_LIST}" ]; then
+              TOOLS_LIST="github"
+            fi
           fi
           
           # Convert dry_run dropdown to flag
